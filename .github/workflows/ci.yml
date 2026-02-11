@@ -1,0 +1,19 @@
+name: redhat7.9-build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: centos:7
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: yum -y install gcc make
+      - name: Build
+        run: make
