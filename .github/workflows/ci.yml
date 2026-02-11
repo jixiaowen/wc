@@ -1,19 +1,90 @@
-name: redhat7.9-build
+name: Build and Release
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main, master, develop ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ main, master, develop ]
+  workflow_dispatch:
 
 jobs:
   build:
+    name: Build for ${{ matrix.target }}
     runs-on: ubuntu-latest
-    container:
-      image: centos:7
+    strategy:
+      matrix:
+        include:
+          - target: centos7
+            arch: x86_64
+            artifact_name: wc-linux-x86_64
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Install build tools
-        run: yum -y install gcc make
-      - name: Build
-        run: make
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build in Docker for RedHat 7 compatibility
+      run: |
+        cat > Dockerfile.build << 'EOF'
+        FROM centos:7
+        
+        RUN sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*.repo && \
+            sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
+        
+        RUN yum install -y gcc make
+        WORKDIR /build
+        EOF
+        
+        docker build -f Dockerfile.build -t rwc-build:centos7 .
+        
+        docker run --rm \
+          -v $PWD:/build \
+          rwc-build:centos7 \
+          bash -c "make"
+
+    - name: Prepare artifact
+      run: |
+        mkdir -p artifacts
+        cp wc artifacts/${{ matrix.artifact_name }}
+        chmod +x artifacts/${{ matrix.artifact_name }}
+        
+        rm -f Dockerfile.build
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: wc-${{ matrix.arch }}
+        path: artifacts/${{ matrix.artifact_name }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Prepare release assets
+      run: |
+        cd artifacts
+        for dir in wc-*; do
+          mv $dir/wc-linux-* .
+          rmdir $dir
+        done
+        ls -lh
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          artifacts/wc-linux-x86_64
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
